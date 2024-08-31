@@ -1,0 +1,17 @@
+# Ignore virtual environments
+.venv/
+env/
+
+# Ignore Python cache files
+__pycache__/
+*.pyc
+
+# Ignore log files
+*.log
+
+# Ignore IDE config files
+.vscode/
+.idea/
+
+# Ignore CSV files (e.g., generated playlists)
+*.csv

@@ -1,0 +1,8 @@
+# Requirements for the Selektaaa project
+librosa
+numpy
+pandas
+scikit-learn
+torch
+tqdm
+pyyaml
