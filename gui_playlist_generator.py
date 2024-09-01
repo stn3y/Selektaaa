@@ -1,146 +1,208 @@
-import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
-import os
+import sys
 import csv
-import yaml
+from PyQt5.QtWidgets import (
+    QApplication, QMainWindow, QLabel, QPushButton, QVBoxLayout, QWidget, 
+    QFileDialog, QProgressBar, QLineEdit, QMessageBox, QTextEdit, QSlider
+)
+from PyQt5.QtCore import Qt, QThread, pyqtSignal
 import logging
-from src.dqn_agent import DQNAgent
-from src.playlist_environment import PlaylistEnvironment
 from src.feature_extraction import analyze_tracks
+from src.playlist_environment import PlaylistEnvironment
+from src.dqn_agent import DQNAgent
 
-class PlaylistGeneratorGUI:
-    def __init__(self, root):
-        self.root = root
-        self.root.title("Playlist Generator")
+class TrackAnalysisThread(QThread):
+    progress = pyqtSignal(int)
+    analysis_done = pyqtSignal(list)
+
+    def __init__(self, directory, csv_file_path):
+        super().__init__()
+        self.directory = directory
+        self.csv_file_path = csv_file_path
+
+    def run(self):
+        tracks = analyze_tracks(self.directory, self.csv_file_path, progress_callback=self.emit_progress)
+        self.analysis_done.emit(tracks)
+
+    def emit_progress(self, value):
+        self.progress.emit(int(value))
+
+class PlaylistGeneratorGUI(QMainWindow):
+    def __init__(self):
+        super().__init__()
+
         self.tracks = None
-        self.config = self.load_config()
+        self.env = None
 
-        self.create_reward_weight_slider("Similarity Weight", 0, 1.0)
-        self.create_reward_weight_slider("Tempo Weight", 1, 1.0)
-        self.create_reward_weight_slider("Energy Weight", 2, 1.0)
+        # Initialize reward weights
+        self.reward_weights = {
+            'similarity': 1.0,
+            'tempo': 0.2,
+            'key': 0.2,
+            'energy': 0.2,
+            'length': 0.2,
+            'dynamic_range': 0.2,
+            'harmonicity': 0.2,
+            'onset_strength': 0.2,
+            'rhythm': 0.2
+        }
 
-        ttk.Label(self.root, text="Crossfade Duration (seconds)").grid(row=5, column=0, padx=10, pady=5, sticky=tk.W)
-        self.crossfade_duration_slider = ttk.Scale(self.root, from_=1, to=10, orient=tk.HORIZONTAL)
-        self.crossfade_duration_slider.set(5)
-        self.crossfade_duration_slider.grid(row=5, column=1, padx=10, pady=5)
+        # Set up the main window
+        self.setWindowTitle("AI DJ Playlist Generator")
+        self.setGeometry(100, 100, 800, 600)
 
-        analyze_button = ttk.Button(root, text="Analyze Tracks", command=self.analyze_tracks)
-        analyze_button.grid(row=6, columnspan=2, pady=10)
+        # Set up central widget and layout
+        self.central_widget = QWidget(self)
+        self.setCentralWidget(self.central_widget)
+        self.layout = QVBoxLayout(self.central_widget)
 
-        self.progress_bar = ttk.Progressbar(root, orient=tk.HORIZONTAL, length=200, mode='determinate')
-        self.progress_bar.grid(row=7, columnspan=2, pady=10)
+        # Title label
+        self.title_label = QLabel("AI DJ Playlist Generator", self)
+        self.title_label.setAlignment(Qt.AlignCenter)
+        self.title_label.setStyleSheet("font-size: 18px; font-weight: bold;")
+        self.layout.addWidget(self.title_label)
 
-        generate_button = ttk.Button(root, text="Generate Playlist", command=self.generate_playlist)
-        generate_button.grid(row=8, columnspan=2, pady=10)
+        # Reward weight sliders
+        self.reward_weight_sliders = {}
+        self.add_reward_weight_slider('similarity', "Similarity Weight", 1.0)
+        self.add_reward_weight_slider('tempo', "Tempo Weight", 0.2)
+        self.add_reward_weight_slider('key', "Key Weight", 0.2)
+        self.add_reward_weight_slider('energy', "Energy Weight", 0.2)
+        self.add_reward_weight_slider('length', "Length Weight", 0.2)
+        self.add_reward_weight_slider('dynamic_range', "Dynamic Range Weight", 0.2)
+        self.add_reward_weight_slider('harmonicity', "Harmonicity Weight", 0.2)
+        self.add_reward_weight_slider('onset_strength', "Onset Strength Weight", 0.2)
+        self.add_reward_weight_slider('rhythm', "Rhythm Weight", 0.2)
 
-        feedback_button = ttk.Button(root, text="Provide Feedback", command=self.provide_feedback)
-        feedback_button.grid(row=9, columnspan=2, pady=10)
+        # Button to select and analyze files
+        self.analyze_button = QPushButton("Select and Analyze Files", self)
+        self.analyze_button.clicked.connect(self.analyze_tracks)
+        self.layout.addWidget(self.analyze_button)
 
-        self.status_label = ttk.Label(root, text="Status: Waiting for user action")
-        self.status_label.grid(row=10, columnspan=2, pady=5)
+        # Progress bar
+        self.progress_bar = QProgressBar(self)
+        self.progress_bar.setValue(0)
+        self.layout.addWidget(self.progress_bar)
 
-    def load_config(self):
-        try:
-            with open('config.yaml', 'r') as file:
-                config = yaml.safe_load(file)
-            return config
-        except Exception as e:
-            messagebox.showerror("Error", f"Failed to load configuration: {e}")
-            self.root.quit()
+        # Button to generate playlist
+        self.generate_button = QPushButton("Generate Playlist", self)
+        self.generate_button.clicked.connect(self.generate_playlist)
+        self.generate_button.setEnabled(False)
+        self.layout.addWidget(self.generate_button)
 
-    def create_reward_weight_slider(self, label_text, row, default_value):
-        label = ttk.Label(self.root, text=label_text)
-        label.grid(row=row, column=0, padx=10, pady=5, sticky=tk.W)
-        
-        slider = ttk.Scale(self.root, from_=0.0, to=10.0, orient=tk.HORIZONTAL)
-        slider.set(default_value)
-        slider.grid(row=row, column=1, padx=10, pady=5)
+        # Feedback entry
+        self.feedback_label = QLabel("Provide Feedback (0-5):", self)
+        self.layout.addWidget(self.feedback_label)
+        self.feedback_entry = QLineEdit(self)
+        self.layout.addWidget(self.feedback_entry)
 
-        setattr(self, f"{label_text.lower().replace(' ', '_')}_slider", slider)
+        # Log display
+        self.log_text = QTextEdit(self)
+        self.log_text.setReadOnly(True)
+        self.layout.addWidget(self.log_text)
+
+        # Set up logging
+        logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(message)s", handlers=[LoggingHandler(self.log_text)])
+
+    def add_reward_weight_slider(self, key, label, default_value):
+        slider_label = QLabel(f"{label}:", self)
+        self.layout.addWidget(slider_label)
+
+        slider = QSlider(Qt.Horizontal, self)
+        slider.setRange(0, 100)
+        slider.setValue(int(default_value * 100))
+        slider.valueChanged.connect(lambda value, k=key: self.update_reward_weight(k, value))
+        self.layout.addWidget(slider)
+
+        self.reward_weight_sliders[key] = slider
+
+    def update_reward_weight(self, key, value):
+        self.reward_weights[key] = value / 100.0
+        logging.info(f"Updated {key} weight to {value / 100.0}")
 
     def analyze_tracks(self):
-        directory = filedialog.askdirectory(title="Select Directory Containing Tracks")
-        logging.info(f"Selected directory: {directory}")
-        if directory:
-            self.status_label.config(text="Status: Analyzing tracks...")
-            self.progress_bar['value'] = 0
-            self.root.update_idletasks()
-
-            try:
-                self.tracks = analyze_tracks(directory, progress_callback=self.update_progress)
-                logging.info(f"Extracted tracks: {self.tracks}")
-                if self.tracks:
-                    self.status_label.config(text="Status: Tracks loaded successfully!")
-                else:
-                    self.status_label.config(text="Error: No valid tracks found.")
-            except Exception as e:
-                self.status_label.config(text=f"Error loading tracks: {e}")
-                logging.error(f"Failed to analyze tracks: {e}")
-                messagebox.showerror("Error", f"Failed to analyze tracks: {e}")
-
-    def update_progress(self, value):
-        self.progress_bar['value'] = value
-        self.root.update_idletasks()
-
-    def generate_playlist(self):
-        if self.tracks is None or len(self.tracks) == 0:
-            self.status_label.config(text="Error: No tracks loaded. Please load tracks first.")
-            messagebox.showerror("Error", "No tracks loaded. Please load tracks first.")
+        # Open file dialogs for directory and CSV file
+        directory = QFileDialog.getExistingDirectory(self, "Select Directory Containing Audio Files")
+        if not directory:
+            QMessageBox.warning(self, "No Directory Selected", "Please select a directory.")
             return
 
-        reward_weights = {
-            'similarity': self.similarity_weight_slider.get(),
-            'tempo': self.tempo_weight_slider.get(),
-            'energy': self.energy_weight_slider.get(),
+        csv_file_path, _ = QFileDialog.getOpenFileName(self, "Select Mixed In Key CSV File", "", "CSV Files (*.csv)")
+        if not csv_file_path:
+            QMessageBox.warning(self, "No CSV File Selected", "Please select a Mixed In Key CSV file.")
+            return
+
+        self.progress_bar.setValue(0)
+        self.track_analysis_thread = TrackAnalysisThread(directory, csv_file_path)
+        self.track_analysis_thread.progress.connect(self.update_progress)
+        self.track_analysis_thread.analysis_done.connect(self.on_analysis_done)
+        self.track_analysis_thread.start()
+
+    def update_progress(self, value):
+        self.progress_bar.setValue(value)
+
+    def on_analysis_done(self, tracks):
+        if not tracks:
+            QMessageBox.critical(self, "Analysis Failed", "No tracks were successfully analyzed. Please try again.")
+            return
+
+        self.tracks = tracks
+        self.env = PlaylistEnvironment(self.tracks, reward_weights=self.reward_weights)
+        config = {
+            "gamma": 0.99,
+            "learning_rate": 0.001
         }
-        crossfade_duration = self.crossfade_duration_slider.get()
+        self.agent = DQNAgent(self.env.feature_dim, len(self.tracks), config)
 
-        try:
-            self.status_label.config(text="Generating playlist...")
-            self.root.update_idletasks()
+        self.generate_button.setEnabled(True)
+        QMessageBox.information(self, "Analysis Complete", "Tracks analyzed successfully!")
 
-            env = PlaylistEnvironment(self.tracks, reward_weights=reward_weights)
-            agent = DQNAgent(env.feature_dim, len(self.tracks), self.config)
+    def generate_playlist(self):
+        if not self.tracks:
+            QMessageBox.critical(self, "Error", "No tracks loaded. Please analyze tracks first.")
+            return
 
-            logging.info("Starting playlist generation...")
-            playlist = agent.generate_playlist(env)
+        playlist = self.agent.generate_playlist(self.env)
 
-            if not playlist:
-                raise ValueError("Generated playlist is empty.")
-            
-            logging.info(f"Generated playlist with {len(playlist)} tracks.")
-            self.save_playlist_to_csv(playlist)
+        feedback = self.collect_feedback()
+        self.env.apply_user_feedback(feedback)
 
-            self.status_label.config(text="Playlist generated successfully!")
-        except Exception as e:
-            self.status_label.config(text=f"Error: {e}")
-            logging.error(f"Failed to generate playlist: {e}", exc_info=True)
-            messagebox.showerror("Error", f"Failed to generate playlist: {e}")
+        output_path, _ = QFileDialog.getSaveFileName(self, "Save Playlist", "", "CSV Files (*.csv)")
+        if output_path:
+            self.save_playlist_to_csv(playlist, output_path)
+            QMessageBox.information(self, "Success", f"Playlist saved to {output_path}")
+        else:
+            QMessageBox.warning(self, "Save Cancelled", "Playlist was not saved.")
 
-    def save_playlist_to_csv(self, playlist):
-        csv_filename = f'generated_playlist_{len(os.listdir())}.csv'
-        with open(csv_filename, mode='w', newline='') as file:
+    def save_playlist_to_csv(self, playlist, output_path):
+        with open(output_path, mode='w', newline='') as file:
             writer = csv.writer(file)
             writer.writerow(['Track Filename'])
             for track in playlist:
                 writer.writerow([track['filename']])
-        messagebox.showinfo("Playlist Saved", f"Playlist has been saved to {csv_filename}")
 
-    def provide_feedback(self):
-        feedback = messagebox.askyesno("Feedback", "Are you satisfied with the playlist?")
-        if feedback:
-            self.status_label.config(text="Positive feedback received. Adjusting model...")
-        else:
-            self.status_label.config(text="Negative feedback received. Retraining model...")
-
+    def collect_feedback(self):
         try:
-            self.generate_playlist()
-        except Exception as e:
-            self.status_label.config(text=f"Error during feedback processing: {e}")
-            logging.error(f"Failed during feedback processing: {e}")
-            messagebox.showerror("Error", f"Failed during feedback processing: {e}")
+            feedback = float(self.feedback_entry.text())
+            if 0 <= feedback <= 5:
+                return {"overall_rating": feedback}
+            else:
+                raise ValueError
+        except ValueError:
+            QMessageBox.critical(self, "Invalid Feedback", "Please enter a number between 0 and 5.")
+            return {}
+
+class LoggingHandler(logging.Handler):
+    def __init__(self, text_widget):
+        super().__init__()
+        self.text_widget = text_widget
+
+    def emit(self, record):
+        msg = self.format(record)
+        self.text_widget.append(msg)
+        self.text_widget.ensureCursorVisible()
 
 if __name__ == "__main__":
-    root = tk.Tk()
-    gui = PlaylistGeneratorGUI(root)
-    root.mainloop()
+    app = QApplication(sys.argv)
+    gui = PlaylistGeneratorGUI()
+    gui.show()
+    sys.exit(app.exec_())

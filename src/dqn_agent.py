@@ -31,15 +31,14 @@ class DQNAgent:
         self.action_dim = action_dim
         self.model = DuelingDQN(state_dim, action_dim).to(device)
         self.target_model = DuelingDQN(state_dim, action_dim).to(device)
-        self.memory = deque(maxlen=config.get('memory_size', 10000))
+        self.memory = deque(maxlen=10000)
         self.gamma = config['gamma']
-        self.epsilon = config.get('epsilon_start', 1.0)
-        self.epsilon_decay = config.get('epsilon_decay', 0.995)
-        self.epsilon_min = config.get('epsilon_min', 0.01)
+        self.epsilon = 1.0
+        self.epsilon_decay = 0.995
+        self.epsilon_min = 0.01
         self.learning_rate = config['learning_rate']
         self.optimizer = optim.Adam(self.model.parameters(), lr=self.learning_rate)
         self.criterion = nn.MSELoss()
-        self.tau = config.get('tau', 0.1)
 
     def remember(self, state, action, reward, next_state, done):
         self.memory.append((state, action, reward, next_state, done))
@@ -50,17 +49,19 @@ class DQNAgent:
         
         state = torch.FloatTensor(state).unsqueeze(0).to(device)
         act_values = self.model(state)
-        valid_actions = [(i, val) for i, val in enumerate(act_values[0]) if i in available_actions]
-        valid_actions.sort(key=lambda x: x[1], reverse=True)
+        max_action_index = torch.argmax(act_values).item()
 
-        if not valid_actions:
+        if max_action_index >= len(available_actions):
             return random.choice(available_actions)
-        return valid_actions[0][0]
+        return available_actions[max_action_index]
 
     def replay(self, batch_size):
         if len(self.memory) < batch_size:
             return
         minibatch = random.sample(self.memory, batch_size)
+
+        logging.info("Training on a new batch...")
+
         for state, action, reward, next_state, done in minibatch:
             target = reward
             if not done:
@@ -77,13 +78,20 @@ class DQNAgent:
             loss.backward()
             self.optimizer.step()
 
+        logging.info("Batch training complete.")
+
         if self.epsilon > self.epsilon_min:
             self.epsilon *= self.epsilon_decay
+            logging.info(f"Epsilon decayed to {self.epsilon:.4f}")
 
+        # Soft update of the target network's weights
         for target_param, param in zip(self.target_model.parameters(), self.model.parameters()):
-            target_param.data.copy_(self.tau * param.data + (1.0 - self.tau) * target_param.data)
+            target_param.data.copy_(0.1 * param.data + 0.9 * target_param.data)
+
+        logging.info("Target network updated.")
 
     def generate_playlist(self, env):
+        logging.info("Starting playlist generation...")
         state = env.reset()
         playlist = []
         while not env.done:
@@ -95,4 +103,5 @@ class DQNAgent:
             self.remember(state, action, reward, next_state, done)
             state = next_state
 
+        logging.info("Playlist generation complete.")
         return playlist
