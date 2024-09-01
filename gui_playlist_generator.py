@@ -2,7 +2,7 @@ import sys
 import csv
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QLabel, QPushButton, QVBoxLayout, QWidget, 
-    QFileDialog, QProgressBar, QLineEdit, QMessageBox, QTextEdit, QSlider
+    QFileDialog, QProgressBar, QLineEdit, QMessageBox, QTextEdit, QSlider, QCheckBox, QComboBox
 )
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
 import logging
@@ -83,6 +83,19 @@ class PlaylistGeneratorGUI(QMainWindow):
         self.progress_bar.setValue(0)
         self.layout.addWidget(self.progress_bar)
 
+        # Context-aware generation option
+        self.context_checkbox = QCheckBox("Enable Context-Aware Playlist Generation", self)
+        self.layout.addWidget(self.context_checkbox)
+
+        # Context selection dropdown
+        self.context_combobox = QComboBox(self)
+        self.context_combobox.addItem("warm_up_set")
+        self.context_combobox.addItem("peak_hour_set")
+        self.context_combobox.addItem("cool_down_set")
+        self.context_combobox.addItem("after_party")
+        self.context_combobox.addItem("chill_out")
+        self.layout.addWidget(self.context_combobox)
+
         # Button to generate playlist
         self.generate_button = QPushButton("Generate Playlist", self)
         self.generate_button.clicked.connect(self.generate_playlist)
@@ -161,17 +174,27 @@ class PlaylistGeneratorGUI(QMainWindow):
             QMessageBox.critical(self, "Error", "No tracks loaded. Please analyze tracks first.")
             return
 
+        # Generate playlist
         playlist = self.agent.generate_playlist(self.env)
 
-        feedback = self.collect_feedback()
-        self.env.apply_user_feedback(feedback)
-
+        # Save the playlist to a CSV file
         output_path, _ = QFileDialog.getSaveFileName(self, "Save Playlist", "", "CSV Files (*.csv)")
         if output_path:
             self.save_playlist_to_csv(playlist, output_path)
             QMessageBox.information(self, "Success", f"Playlist saved to {output_path}")
         else:
             QMessageBox.warning(self, "Save Cancelled", "Playlist was not saved.")
+        
+        # Ask for feedback after generating the playlist
+        feedback = self.collect_feedback()
+
+        # Apply user feedback to improve the model
+        if feedback:
+            self.env.apply_user_feedback(feedback)
+            self.agent.replay(batch_size=32)  # Assuming a batch size of 32 for replaying the memory
+            QMessageBox.information(self, "Feedback Applied", "The model has been updated based on your feedback.")
+        else:
+            QMessageBox.warning(self, "No Feedback Provided", "The model was not updated.")
 
     def save_playlist_to_csv(self, playlist, output_path):
         with open(output_path, mode='w', newline='') as file:

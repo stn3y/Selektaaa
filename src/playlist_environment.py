@@ -233,12 +233,18 @@ class PlaylistEnvironment:
         if len(playlist) < 2:
             raise ValueError("Playlist must contain at least two tracks to apply crossfade.")
 
-        output_audio = self.apply_crossfade(playlist[0], playlist[1])
+        output_audio, sr = self.apply_crossfade(playlist[0], playlist[1])
 
         for i in range(2, len(playlist)):
-            output_audio = np.concatenate([output_audio, self.apply_crossfade(playlist[i-1], playlist[i])])
+            next_audio, _ = self.apply_crossfade(playlist[i-1], playlist[i])
+            if next_audio is not None:
+                output_audio = np.concatenate([output_audio, next_audio])
 
-        sf.write(output_path, output_audio, 44100)
+        # Normalize the volume of the entire playlist
+        output_audio = self.normalize_volume(output_audio)
+
+        sf.write(output_path, output_audio, sr)
+        logging.info(f"Playlist saved with crossfade to {output_path}")
 
     def collect_user_feedback(self, playlist):
         # Placeholder for user feedback collection

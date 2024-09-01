@@ -32,33 +32,43 @@ class DQNAgent:
         self.model = DuelingDQN(state_dim, action_dim).to(device)
         self.target_model = DuelingDQN(state_dim, action_dim).to(device)
         self.memory = deque(maxlen=10000)
-        self.gamma = config['gamma']
+        self.gamma = config.get('gamma', 0.99)
         self.epsilon = 1.0
-        self.epsilon_decay = 0.995
-        self.epsilon_min = 0.01
-        self.learning_rate = config['learning_rate']
+        self.epsilon_decay = config.get('epsilon_decay', 0.995)
+        self.epsilon_min = config.get('epsilon_min', 0.01)
+        self.learning_rate = config.get('learning_rate', 0.001)
         self.optimizer = optim.Adam(self.model.parameters(), lr=self.learning_rate)
         self.criterion = nn.MSELoss()
+        self.batch_size = config.get('batch_size', 64)
 
     def remember(self, state, action, reward, next_state, done):
         self.memory.append((state, action, reward, next_state, done))
 
     def act(self, state, available_actions):
         if random.random() <= self.epsilon:
-            return random.choice(available_actions)
+            selected_action = random.choice(available_actions)
+            logging.info(f"Random action selected: {selected_action}")
+            return selected_action
         
         state = torch.FloatTensor(state).unsqueeze(0).to(device)
         act_values = self.model(state)
-        max_action_index = torch.argmax(act_values).item()
+        
+        sorted_actions = torch.argsort(act_values, descending=True).cpu().numpy()[0]
+        for action in sorted_actions:
+            if action in available_actions:
+                logging.info(f"Model action selected: {action}")
+                return action
+        
+        # Fallback in case the model's best actions are not available
+        fallback_action = random.choice(available_actions)
+        logging.warning(f"Fallback action selected: {fallback_action}")
+        return fallback_action
 
-        if max_action_index >= len(available_actions):
-            return random.choice(available_actions)
-        return available_actions[max_action_index]
-
-    def replay(self, batch_size):
-        if len(self.memory) < batch_size:
+    def replay(self):
+        if len(self.memory) < self.batch_size:
+            logging.warning("Not enough samples in memory to replay.")
             return
-        minibatch = random.sample(self.memory, batch_size)
+        minibatch = random.sample(self.memory, self.batch_size)
 
         logging.info("Training on a new batch...")
 
@@ -69,12 +79,11 @@ class DQNAgent:
                 target = reward + self.gamma * torch.max(self.target_model(next_state)[0]).item()
 
             state = torch.FloatTensor(state).unsqueeze(0).to(device)
-            target_f = self.model(state)
-
+            target_f = self.model(state).detach()
             target_f[0][action] = target
 
             self.optimizer.zero_grad()
-            loss = self.criterion(target_f, self.model(state))
+            loss = self.criterion(self.model(state), target_f)
             loss.backward()
             self.optimizer.step()
 
@@ -85,23 +94,35 @@ class DQNAgent:
             logging.info(f"Epsilon decayed to {self.epsilon:.4f}")
 
         # Soft update of the target network's weights
+        self.update_target_model()
+
+    def update_target_model(self):
+        # Soft update of the target network's weights
         for target_param, param in zip(self.target_model.parameters(), self.model.parameters()):
             target_param.data.copy_(0.1 * param.data + 0.9 * target_param.data)
 
         logging.info("Target network updated.")
 
-    def generate_playlist(self, env):
+    def generate_playlist(self, env, context_based=False, user_context=None):
         logging.info("Starting playlist generation...")
         state = env.reset()
-        playlist = []
-        while not env.done:
-            action = self.act(state, env.available_tracks)
-            if action is None:
-                break
-            next_state, reward, done, available_tracks = env.step(action)
-            playlist.append(env.tracks[action])
-            self.remember(state, action, reward, next_state, done)
-            state = next_state
+
+        if context_based and user_context is not None:
+            logging.info("Using context-aware playlist generation.")
+            playlist = env.generate_context_aware_playlist(user_context)
+        else:
+            playlist = []
+            while not env.done:
+                action = self.act(state, env.available_tracks)
+                if action is None:
+                    break
+                next_state, reward, done, available_tracks = env.step(action)
+                playlist.append(env.tracks[action])
+                self.remember(state, action, reward, next_state, done)
+                state = next_state
 
         logging.info("Playlist generation complete.")
         return playlist
+
+    def train(self):
+        self.replay()

@@ -1,8 +1,11 @@
-# Requirements for the Selektaaa project
-librosa
 numpy
 pandas
+librosa
+PyQt5
 scikit-learn
-torch
+tensorflow
 tqdm
+soundfile
+audioread
+matplotlib
 pyyaml
